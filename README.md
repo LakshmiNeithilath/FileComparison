@@ -10,7 +10,7 @@ The code takes 2 pdf files, converts it to text, converts it to english and then
 
 Install dependencies
 
-!pip install deep_translator \n
+!pip install deep_translator 
 !pip install langdetect
 !pip install PyPDF2 spacy scikit-learn numpy
 !python -m spacy download en_core_web_md
