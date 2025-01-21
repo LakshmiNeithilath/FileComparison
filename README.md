@@ -17,4 +17,4 @@ Install dependencies
 
 After this, restart your kernel
 
-If it does not work, do not contact me. I know just as much as you
+If it does not work, do not contact me. I know just as much as you but do check out https://colab.research.google.com/drive/1mhTsJL4Jh6V6VwHV5kCY2qaITSx7kJO5?usp=sharing
