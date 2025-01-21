@@ -1,0 +1,228 @@
+import PyPDF2
+import spacy
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from typing import Tuple, List
+import logging
+from langdetect import detect
+from deep_translator import GoogleTranslator
+from langdetect.lang_detect_exception import LangDetectException
+
+class PDFSimilarityChecker:
+    def __init__(self):
+        try:
+            self.nlp = spacy.load('en_core_web_md')
+        except OSError:
+            raise ImportError("Please install the English model using: python -m spacy download en_core_web_md")
+        
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
+        self.translator = GoogleTranslator(source='auto', target='en')
+
+    def detect_language(self, text: str) -> str:
+        """
+        Detect the language of the input text.
+        
+        Args:
+            text (str): Input text
+            
+        Returns:
+            str: Language code (e.g., 'en' for English)
+        """
+        try:
+            return detect(text)
+        except LangDetectException as e:
+            self.logger.error(f"Language detection error: {str(e)}")
+            raise
+
+    def translate_to_english(self, text: str, source_lang: str) -> str:
+        """
+        Translate text to English if it's not already in English.
+        
+        Args:
+            text (str): Input text
+            source_lang (str): Source language code
+            
+        Returns:
+            str: Text translated to English if necessary
+        """
+        if source_lang != 'en':
+            try:
+                self.logger.info(f"Translating text from {source_lang} to English")
+                # Translate text in chunks to handle large documents
+                chunk_size = 4000  # Google Translate has a character limit
+                chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+                translated_chunks = [self.translator.translate(chunk) for chunk in chunks]
+                return ' '.join(translated_chunks)
+            except Exception as e:
+                self.logger.error(f"Translation error: {str(e)}")
+                raise
+        return text
+
+    def extract_text_from_pdf(self, pdf_path: str) -> str:
+        """
+        Extract text content from a PDF file.
+        
+        Args:
+            pdf_path (str): Path to the PDF file
+            
+        Returns:
+            str: Extracted text content
+        """
+        try:
+            with open(pdf_path, 'rb') as file:
+                reader = PyPDF2.PdfReader(file)
+                text = ''
+                for page in reader.pages:
+                    text += page.extract_text()
+                return text
+        except Exception as e:
+            self.logger.error(f"Error reading PDF {pdf_path}: {str(e)}")
+            raise
+
+    def preprocess_text(self, text: str) -> str:
+        """
+        Preprocess text by removing extra whitespace and converting to lowercase.
+        
+        Args:
+            text (str): Input text
+            
+        Returns:
+            str: Preprocessed text
+        """
+        return ' '.join(text.lower().split())
+
+    def get_document_embedding(self, text: str) -> np.ndarray:
+        """
+        Generate document embedding using spaCy.
+        
+        Args:
+            text (str): Input text
+            
+        Returns:
+            np.ndarray: Document embedding vector
+        """
+        doc = self.nlp(text)
+        return doc.vector
+
+    def calculate_similarity(self, text1: str, text2: str) -> Tuple[float, List[str]]:
+        """
+        Calculate similarity between two texts and identify potential differences.
+        
+        Args:
+            text1 (str): First text
+            text2 (str): Second text
+            
+        Returns:
+            Tuple[float, List[str]]: Similarity score and list of potential differences
+        """
+        embedding1 = self.get_document_embedding(text1)
+        embedding2 = self.get_document_embedding(text2)
+        
+        similarity = cosine_similarity(
+            embedding1.reshape(1, -1), 
+            embedding2.reshape(1, -1)
+        )[0][0]
+        
+        doc1 = self.nlp(text1)
+        doc2 = self.nlp(text2)
+        
+        differences = []
+        entities1 = set([ent.text.lower() for ent in doc1.ents])
+        entities2 = set([ent.text.lower() for ent in doc2.ents])
+        
+        if entities1 != entities2:
+            unique_to_1 = entities1 - entities2
+            unique_to_2 = entities2 - entities1
+            if unique_to_1:
+                differences.append(f"Unique entities in first document: {', '.join(unique_to_1)}")
+            if unique_to_2:
+                differences.append(f"Unique entities in second document: {', '.join(unique_to_2)}")
+        
+        return similarity, differences
+
+    def process_and_translate_text(self, text: str, doc_name: str) -> Tuple[str, str]:
+        """
+        Process text by detecting language and translating if necessary.
+        
+        Args:
+            text (str): Input text
+            doc_name (str): Document identifier for logging
+            
+        Returns:
+            Tuple[str, str]: Processed text and detected language
+        """
+        text = self.preprocess_text(text)
+        detected_lang = self.detect_language(text)
+        self.logger.info(f"{doc_name} detected language: {detected_lang}")
+        
+        if detected_lang != 'en':
+            text = self.translate_to_english(text, detected_lang)
+        return text, detected_lang
+
+    def compare_pdfs(self, pdf_path1: str, pdf_path2: str) -> Tuple[float, List[str], dict]:
+        """
+        Compare two PDFs and return their similarity score, differences, and language info.
+        
+        Args:
+            pdf_path1 (str): Path to first PDF
+            pdf_path2 (str): Path to second PDF
+            
+        Returns:
+            Tuple[float, List[str], dict]: Similarity score, list of differences, and language info
+        """
+        # Extract text from PDFs
+        text1 = self.extract_text_from_pdf(pdf_path1)
+        text2 = self.extract_text_from_pdf(pdf_path2)
+        
+        # Process and translate texts if necessary
+        text1, lang1 = self.process_and_translate_text(text1, "Document 1")
+        text2, lang2 = self.process_and_translate_text(text2, "Document 2")
+        
+        # Calculate similarity and differences
+        similarity_score, differences = self.calculate_similarity(text1, text2)
+        
+        # Language information
+        language_info = {
+            'doc1_language': lang1,
+            'doc2_language': lang2,
+            'translation_performed': lang1 != 'en' or lang2 != 'en'
+        }
+        
+        return similarity_score, differences, language_info
+
+def main():
+    checker = PDFSimilarityChecker()
+    
+    try:
+        pdf1_path = "/content/trial_english_littleprince.pdf"
+        #pdf1_path = "path/to/first.pdf"
+        #pdf2_path = "path/to/second.pdf"
+        pdf2_path = "/content/littleprince_french_pdf.pdf"
+        
+        similarity_score, differences, language_info = checker.compare_pdfs(pdf1_path, pdf2_path)
+        
+        print("\nLanguage Information:")
+        print(f"Document 1 Language: {language_info['doc1_language']}")
+        print(f"Document 2 Language: {language_info['doc2_language']}")
+        if language_info['translation_performed']:
+            print("Translation was performed to standardize comparison")
+        
+        print(f"\nSimilarity Score: {similarity_score:.2%}")
+        if similarity_score >= 0.90:
+            print("The documents are highly similar in content")
+        elif similarity_score >= 0.75:
+            print("The documents have moderate similarity")
+        else:
+            print("The documents have significant differences")
+            
+        if differences:
+            print("\nKey Differences Found:")
+            for diff in differences:
+                print(f"- {diff}")
+                
+    except Exception as e:
+        print(f"Error: {str(e)}")
+
+if __name__ == "__main__":
+    main()
